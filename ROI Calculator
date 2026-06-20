@@ -265,6 +265,83 @@ class PeakControlROICalculator extends HTMLElement {
     .track-fill{ transition: none; }
   }
 
+  /* -- Internal margin panel (hidden by default, toggled by ?internal=1) -- */
+  .internal-panel{
+    margin-top: 28px;
+    border: 1px solid rgba(245, 176, 66, 0.4);
+    background: rgba(245, 176, 66, 0.06);
+    border-radius: 14px;
+    padding: 22px;
+    font-family: 'Alliance No.2', system-ui, sans-serif;
+    display: none;
+  }
+  .internal-panel.visible{ display: block; }
+  .internal-panel .ip-label{
+    color: rgba(245, 176, 66, 1);
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    margin-bottom: 18px;
+  }
+  .internal-grid{
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    margin-bottom: 18px;
+  }
+  .internal-kpi{
+    background: var(--card, #ffffff);
+    border: 1px solid var(--border, rgba(0,0,0,0.08));
+    border-radius: 10px;
+    padding: 12px 14px;
+  }
+  .internal-kpi .k-label{
+    font-size: 11px;
+    color: var(--text-secondary, #6b7280);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .internal-kpi .k-value{
+    font-size: 24px;
+    font-weight: 700;
+    margin-top: 4px;
+    color: var(--text-primary, #1f2937);
+    font-variant-numeric: tabular-nums;
+  }
+  .internal-kpi .k-hint{
+    font-size: 11px;
+    color: var(--text-secondary, #6b7280);
+    margin-top: 2px;
+  }
+  .internal-kpi.good .k-value{ color: var(--mint, #5dd6a3); }
+  .ip-table{
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  .ip-table td{
+    padding: 8px 0;
+    border-bottom: 1px solid rgba(0,0,0,0.06);
+    color: var(--text-secondary, #6b7280);
+  }
+  .ip-table tr:last-child td{ border-bottom: none; }
+  .ip-table td.value{
+    text-align: right;
+    color: var(--text-primary, #1f2937);
+    font-variant-numeric: tabular-nums;
+  }
+  .ip-table td.indent{ padding-left: 18px; }
+  .ip-table tr.bold td{ font-weight: 700; color: var(--text-primary, #1f2937); }
+  .ip-table tr.good td.value{ color: var(--mint, #5dd6a3); }
+  .ip-table tr.bad td.value{ color: #ef5a5a; }
+  .internal-panel .ip-warn{
+    margin-top: 14px;
+    font-size: 11px;
+    font-style: italic;
+    color: var(--text-secondary, #6b7280);
+  }
+
       </style>
 <div class="wrap">
   <div class="grid">
@@ -367,6 +444,42 @@ class PeakControlROICalculator extends HTMLElement {
 
     </div>
   </div>
+
+  <!-- INTERNAL MARGIN PANEL — toggled via ?internal=1 in URL. Never surface to customers. -->
+  <div class="internal-panel" id="internal-panel">
+    <div class="ip-label">🔒 Internal margin view — not shown to customers</div>
+    <div class="internal-grid">
+      <div class="internal-kpi">
+        <div class="k-label">Total tokens / month</div>
+        <div class="k-value" id="ip-tokens">0</div>
+        <div class="k-hint" id="ip-tokens-hint">0 in · 0 out</div>
+      </div>
+      <div class="internal-kpi">
+        <div class="k-label">Anthropic bill / month</div>
+        <div class="k-value" id="ip-anthropic">$0</div>
+        <div class="k-hint" id="ip-anthropic-hint">Sonnet 4.6 list · $0 / PO</div>
+      </div>
+      <div class="internal-kpi good">
+        <div class="k-label">Gross margin</div>
+        <div class="k-value" id="ip-margin-pct">0%</div>
+        <div class="k-hint" id="ip-margin-hint">$0 / month</div>
+      </div>
+    </div>
+    <table class="ip-table">
+      <tbody>
+        <tr class="bad"><td>AI cost — actually paid to Anthropic</td><td class="value" id="ip-anthropic-row">-$0</td></tr>
+        <tr><td>AI cost billed to customer (raw × 1.30 hidden margin)</td><td class="value" id="ip-ai-billed">$0</td></tr>
+        <tr class="good"><td class="indent">↳ Hidden AI margin</td><td class="value" id="ip-ai-margin">+$0</td></tr>
+        <tr><td>Subscription tier base</td><td class="value" id="ip-tier">$0</td></tr>
+        <tr><td>Value capture (16% of customer gross savings)</td><td class="value" id="ip-vc">$0</td></tr>
+        <tr class="bold"><td>Total revenue from customer</td><td class="value" id="ip-revenue">$0</td></tr>
+        <tr class="bold good"><td>Gross margin</td><td class="value" id="ip-margin">$0</td></tr>
+      </tbody>
+    </table>
+    <div class="ip-warn">
+      The hidden 30% margin on AI cost is folded into the customer's bill and the ROI number they see — never surfaced as a separate line item. Do not screen share this view with prospects.
+    </div>
+  </div>
 </div>
     `;
     this.initCalculator();
@@ -410,6 +523,30 @@ class PeakControlROICalculator extends HTMLElement {
       const VALUE_CAPTURE_RATE = 0.16; // % of value created, layered on top of base fee
       const RAMP_SMOOTHING = 3; // higher = slower, more gradual ROI ramp
 
+      // -- AI cost basis -----------------------------------------------------
+      // Measured from the live PeakControl prototype on Claude Sonnet 4.6:
+      // a fully resolved PO (1 initial follow-up + ~2 supplier reply cycles)
+      // consumes ~3,500 input tokens and ~800 output tokens. We bill the
+      // customer the raw Anthropic cost plus a hidden margin — never surfaced
+      // as a separate line item.
+      const AI_TOKENS_PER_PO_INPUT  = 3500;
+      const AI_TOKENS_PER_PO_OUTPUT = 800;
+      const ANTHROPIC_INPUT_USD_MTOK  = 3.0;  // Sonnet 4.6 list price
+      const ANTHROPIC_OUTPUT_USD_MTOK = 15.0;
+      const HIDDEN_AI_MARGIN = 0.30; // 30%, baked silently into customer pricing
+      const SHOW_INTERNAL = (() => {
+        try {
+          return new URLSearchParams(window.location.search).get('internal') === '1';
+        } catch (e) { return false; }
+      })();
+
+      function aiCostRawPerPO(){
+        return (
+          (AI_TOKENS_PER_PO_INPUT  * ANTHROPIC_INPUT_USD_MTOK) +
+          (AI_TOKENS_PER_PO_OUTPUT * ANTHROPIC_OUTPUT_USD_MTOK)
+        ) / 1000000;
+      }
+
       function getTierBase(pos){
         if (pos <= 750)  return 1700; // confirmed starter price
         if (pos <= 1500) return 2200;
@@ -434,7 +571,58 @@ class PeakControlROICalculator extends HTMLElement {
       const costSavedEl = this.shadowRoot.getElementById('cost-saved');
       const roiEl        = this.shadowRoot.getElementById('roi-value');
 
+      // Internal panel element refs (used only when SHOW_INTERNAL is on)
+      const internalPanel = this.shadowRoot.getElementById('internal-panel');
+      const ipTokens      = this.shadowRoot.getElementById('ip-tokens');
+      const ipTokensHint  = this.shadowRoot.getElementById('ip-tokens-hint');
+      const ipAnthropic   = this.shadowRoot.getElementById('ip-anthropic');
+      const ipAnthropicH  = this.shadowRoot.getElementById('ip-anthropic-hint');
+      const ipAnthropicRow= this.shadowRoot.getElementById('ip-anthropic-row');
+      const ipAiBilled    = this.shadowRoot.getElementById('ip-ai-billed');
+      const ipAiMargin    = this.shadowRoot.getElementById('ip-ai-margin');
+      const ipTier        = this.shadowRoot.getElementById('ip-tier');
+      const ipVc          = this.shadowRoot.getElementById('ip-vc');
+      const ipRevenue     = this.shadowRoot.getElementById('ip-revenue');
+      const ipMargin      = this.shadowRoot.getElementById('ip-margin');
+      const ipMarginPct   = this.shadowRoot.getElementById('ip-margin-pct');
+      const ipMarginHint  = this.shadowRoot.getElementById('ip-margin-hint');
+
+      if (SHOW_INTERNAL && internalPanel) {
+        internalPanel.classList.add('visible');
+      }
+
       function fmt(n){ return Math.round(n).toLocaleString('en-US'); }
+      function fmtMoney(n){ return '$' + fmt(n); }
+      function fmtSignedMoney(n){
+        if (n >= 0) return '+$' + fmt(n);
+        return '-$' + fmt(Math.abs(n));
+      }
+
+      function updateInternalPanel(ctx){
+        const totalIn  = ctx.pos * AI_TOKENS_PER_PO_INPUT;
+        const totalOut = ctx.pos * AI_TOKENS_PER_PO_OUTPUT;
+        const totalTokens = totalIn + totalOut;
+        const revenue = ctx.tierBase + ctx.valueCapture + ctx.aiCostBilled;
+        const grossMargin = revenue - ctx.aiCostRaw;
+        const grossMarginPct = revenue > 0 ? (grossMargin / revenue) * 100 : 0;
+        const aiMargin = ctx.aiCostBilled - ctx.aiCostRaw;
+        const perPo = ctx.pos > 0 ? ctx.aiCostRaw / ctx.pos : 0;
+
+        ipTokens.textContent     = (totalTokens / 1000000).toFixed(2) + ' M';
+        ipTokensHint.textContent = fmt(totalIn) + ' in · ' + fmt(totalOut) + ' out';
+        ipAnthropic.textContent  = fmtMoney(ctx.aiCostRaw);
+        ipAnthropicH.textContent = 'Sonnet 4.6 list · $' + perPo.toFixed(3) + ' / PO';
+        ipMarginPct.textContent  = grossMarginPct.toFixed(1) + '%';
+        ipMarginHint.textContent = fmtMoney(grossMargin) + ' / month';
+
+        ipAnthropicRow.textContent = '-' + fmtMoney(ctx.aiCostRaw);
+        ipAiBilled.textContent     = fmtMoney(ctx.aiCostBilled);
+        ipAiMargin.textContent     = '+' + fmtMoney(aiMargin);
+        ipTier.textContent         = fmtMoney(ctx.tierBase);
+        ipVc.textContent           = fmtMoney(ctx.valueCapture);
+        ipRevenue.textContent      = fmtMoney(revenue);
+        ipMargin.textContent       = fmtMoney(grossMargin);
+      }
 
       function updateFill(input, fillEl){
         const min = parseFloat(input.min);
@@ -479,15 +667,34 @@ class PeakControlROICalculator extends HTMLElement {
         // Error reduction on manual labor cost
         const errorSavings = manualHours * cost * ERROR_REDUCTION_RATE;
 
-        const costSaved = headcountSavings + errorSavings;
+        const grossSavings = headcountSavings + errorSavings;
 
-        // Plan cost: volume-based base fee + value-capture component
-        const planCost = getTierBase(pos) + (costSaved * VALUE_CAPTURE_RATE);
-        const roi = planCost > 0 ? (costSaved / planCost) : 0;
+        // AI cost on top of subscription, with hidden margin baked in.
+        const aiCostRaw    = aiCostRawPerPO() * pos;
+        const aiCostBilled = aiCostRaw * (1 + HIDDEN_AI_MARGIN);
+
+        // Plan cost: volume-based base fee + value-capture component + AI cost
+        // with hidden margin. The customer sees only the final savings/ROI
+        // numbers — never the margin breakdown.
+        const tierBase     = getTierBase(pos);
+        const valueCapture = grossSavings * VALUE_CAPTURE_RATE;
+        const planCost     = tierBase + valueCapture + aiCostBilled;
+        const netSavings   = grossSavings - planCost;
+        const roi          = planCost > 0 ? (Math.max(0, netSavings) / planCost) : 0;
 
         timeSavedEl.textContent = fmt(manualHours);
-        costSavedEl.textContent = '$' + fmt(costSaved);
+        costSavedEl.textContent = '$' + fmt(Math.max(0, netSavings));
         roiEl.textContent = roi.toFixed(1).replace(/\.0$/, '') + 'x';
+
+        if (SHOW_INTERNAL) updateInternalPanel({
+          pos,
+          aiCostRaw,
+          aiCostBilled,
+          tierBase,
+          valueCapture,
+          grossSavings,
+          planCost
+        });
       }
 
       function recalcWithPulse(){
